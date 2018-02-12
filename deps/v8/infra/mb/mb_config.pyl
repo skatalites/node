@@ -67,14 +67,14 @@
       'V8 Linux64 - debug builder': 'gn_debug_x64',
       'V8 Linux64 - custom snapshot - debug builder': 'gn_debug_x64_custom',
       'V8 Linux64 - internal snapshot': 'gn_release_x64_internal',
-      'V8 Linux64 - gyp': 'gyp_release_x64',
       'V8 Linux64 - verify csa': 'gn_release_x64_verify_csa',
       # Windows.
       'V8 Win32 - builder': 'gn_release_x86_minimal_symbols',
       'V8 Win32 - debug builder': 'gn_debug_x86_minimal_symbols',
       'V8 Win32 - nosnap - shared':
         'gn_release_x86_no_snap_shared_minimal_symbols',
-      'V8 Win32 ASAN': 'gn_release_x86_asan_no_lsan',
+      # TODO(machenbach): Remove after switching to x64 on infra side.
+      'V8 Win64 ASAN': 'gn_release_x64_asan_no_lsan',
       'V8 Win64': 'gn_release_x64_minimal_symbols',
       'V8 Win64 - debug': 'gn_debug_x64_minimal_symbols',
       'V8 Win64 - msvc': 'gn_release_x64_msvc',
@@ -108,19 +108,21 @@
       'V8 Random Deopt Fuzzer - debug': 'gn_debug_x64',
     },
     'client.v8.clusterfuzz': {
-      'V8 Win32 ASAN - release builder':
-        'gn_release_x86_asan_no_lsan_verify_heap',
+      'V8 Win64 ASAN - release builder':
+        'gn_release_x64_asan_no_lsan_verify_heap',
       # Note this is called a debug builder, but it uses a release build
       # configuration with dchecks (which enables DEBUG in V8), since win-asan
       # debug is not supported.
-      'V8 Win32 ASAN - debug builder':
-        'gn_release_x86_asan_no_lsan_verify_heap_dchecks',
+      'V8 Win64 ASAN - debug builder':
+        'gn_release_x64_asan_no_lsan_verify_heap_dchecks',
       'V8 Mac64 ASAN - release builder':
           'gn_release_x64_asan_no_lsan_edge_verify_heap',
       'V8 Mac64 ASAN - debug builder':
           'gn_debug_x64_asan_no_lsan_static_edge',
       'V8 Linux64 - release builder': 'gn_release_x64_correctness_fuzzer',
       'V8 Linux64 - debug builder': 'gn_debug_x64',
+      'V8 Linux64 - nosnap release builder': 'gn_release_x64_no_snap',
+      'V8 Linux64 - nosnap debug builder': 'gn_debug_x64_no_snap',
       'V8 Linux64 ASAN no inline - release builder':
           'gn_release_x64_asan_symbolized_edge_verify_heap',
       'V8 Linux64 ASAN - debug builder': 'gn_debug_x64_asan_edge',
@@ -154,7 +156,7 @@
           'gn_debug_simulate_arm64_no_snap',
       'V8 Linux - arm64 - sim - gc stress': 'gn_debug_simulate_arm64',
       # Mips.
-      'V8 Mips - builder': 'gyp_release_mips_no_snap_no_i18n',
+      'V8 Mips - builder': 'gn_release_mips_no_snap_no_i18n',
       'V8 Linux - mipsel - sim - builder': 'gn_release_simulate_mipsel',
       'V8 Linux - mips64el - sim - builder': 'gn_release_simulate_mips64el',
       # PPC.
@@ -204,9 +206,9 @@
       'v8_linux_gcc_rel': 'gn_release_x86_gcc_minimal_symbols',
       'v8_linux_shared_compile_rel': 'gn_release_x86_shared_verify_heap',
       'v8_linux64_gcc_compile_dbg': 'gn_debug_x64_gcc',
-      'v8_linux64_rel_ng': 'gn_release_x64_trybot',
+      'v8_linux64_fyi_rel_ng': 'gn_release_x64_test_features_trybot',
+      'v8_linux64_rel_ng': 'gn_release_x64_test_features_trybot',
       'v8_linux64_verify_csa_rel_ng': 'gn_release_x64_verify_csa',
-      'v8_linux64_gyp_rel_ng': 'gyp_release_x64',
       'v8_linux64_asan_rel_ng': 'gn_release_x64_asan_minimal_symbols',
       'v8_linux64_msan_rel': 'gn_release_simulate_arm64_msan_minimal_symbols',
       'v8_linux64_sanitizer_coverage_rel':
@@ -215,13 +217,13 @@
       'v8_linux64_tsan_concurrent_marking_rel_ng':
           'gn_release_x64_tsan_concurrent_marking_minimal_symbols',
       'v8_linux64_ubsan_rel_ng': 'gn_release_x64_ubsan_vptr_minimal_symbols',
-      'v8_win_asan_rel_ng': 'gn_release_x86_asan_no_lsan',
+      # TODO(machenbach): Remove after switching to x64 on infra side.
       'v8_win_dbg': 'gn_debug_x86_trybot',
       'v8_win_compile_dbg': 'gn_debug_x86_trybot',
       'v8_win_rel_ng': 'gn_release_x86_trybot',
       'v8_win_nosnap_shared_rel_ng':
         'gn_release_x86_no_snap_shared_minimal_symbols',
-      # TODO(machenbach): Rename bot to msvc.
+      'v8_win64_asan_rel_ng': 'gn_release_x64_asan_no_lsan',
       'v8_win64_msvc_compile_rel': 'gn_release_x64_msvc',
       'v8_win64_dbg': 'gn_debug_x64_minimal_symbols',
       'v8_win64_rel_ng': 'gn_release_x64_trybot',
@@ -403,6 +405,11 @@
     'gn_release_x64_asan_no_lsan_edge_verify_heap': [
       'gn', 'release_bot', 'x64', 'asan', 'edge', 'swarming',
       'v8_verify_heap'],
+    'gn_release_x64_asan_no_lsan_verify_heap': [
+      'gn', 'release_bot', 'x64', 'asan', 'swarming', 'v8_verify_heap'],
+    'gn_release_x64_asan_no_lsan_verify_heap_dchecks': [
+      'gn', 'release_bot', 'x64', 'asan', 'swarming', 'dcheck_always_on',
+      'v8_enable_slow_dchecks', 'v8_verify_heap'],
     'gn_release_x64_asan_symbolized_edge_verify_heap': [
       'gn', 'release_bot', 'x64', 'asan', 'edge', 'lsan', 'symbolized',
       'v8_verify_heap'],
@@ -426,8 +433,12 @@
       'gn', 'release_bot', 'x64', 'swarming', 'v8_snapshot_internal'],
     'gn_release_x64_minimal_symbols': [
       'gn', 'release_bot', 'x64', 'minimal_symbols', 'swarming'],
+    'gn_release_x64_no_snap': [
+      'gn', 'release_bot', 'x64', 'swarming', 'v8_snapshot_none'],
     'gn_release_x64_trybot': [
       'gn', 'release_trybot', 'x64', 'swarming'],
+    'gn_release_x64_test_features_trybot': [
+      'gn', 'release_trybot', 'x64', 'swarming', 'v8_enable_test_features'],
     'gn_release_x64_tsan': [
       'gn', 'release_bot', 'x64', 'tsan', 'swarming'],
     'gn_release_x64_tsan_concurrent_marking': [
@@ -464,6 +475,8 @@
       'gn', 'debug_bot', 'x64', 'gcc'],
     'gn_debug_x64_minimal_symbols': [
       'gn', 'debug_bot', 'x64', 'minimal_symbols', 'swarming'],
+    'gn_debug_x64_no_snap': [
+      'gn', 'debug_bot', 'x64', 'swarming', 'v8_snapshot_none'],
 
     # GN debug configs for x86.
     'gn_debug_x86': [
@@ -487,14 +500,6 @@
     # GN release configs for x86.
     'gn_release_x86': [
       'gn', 'release_bot', 'x86', 'swarming'],
-    'gn_release_x86_asan_no_lsan': [
-      'gn', 'release_bot', 'x86', 'asan', 'clang', 'swarming'],
-    'gn_release_x86_asan_no_lsan_verify_heap': [
-      'gn', 'release_bot', 'x86', 'asan', 'clang', 'swarming',
-      'v8_verify_heap'],
-    'gn_release_x86_asan_no_lsan_verify_heap_dchecks': [
-      'gn', 'release_bot', 'x86', 'asan', 'clang', 'swarming',
-      'dcheck_always_on', 'v8_enable_slow_dchecks', 'v8_verify_heap'],
     'gn_release_x86_disassembler': [
       'gn', 'release_bot', 'x86', 'v8_enable_disassembler'],
     'gn_release_x86_gcc': [
@@ -528,14 +533,10 @@
       'gn', 'release_bot', 'x86', 'swarming', 'dcheck_always_on',
       'v8_enable_slow_dchecks', 'v8_verify_csa'],
 
-    # Gyp release configs for mips.
-    'gyp_release_mips_no_snap_no_i18n': [
-      'gyp', 'release', 'mips', 'crosscompile', 'no_sysroot', 'static',
+    # GN release configs for mips.
+    'gn_release_mips_no_snap_no_i18n': [
+      'gn', 'release', 'mips', 'crosscompile', 'no_sysroot', 'static',
       'v8_no_i18n', 'v8_snapshot_none'],
-
-    # Gyp release configs for x64.
-    'gyp_release_x64': [
-      'gyp', 'release_bot', 'x64', 'no_sysroot', 'swarming'],
   },
 
   'mixins': {
@@ -555,6 +556,7 @@
     },
 
     'asan': {
+      'mixins': ['clang', 'v8_enable_test_features'],
       'gn_args': 'is_asan=true',
       'gyp_defines': 'clang=1 asan=1',
     },
@@ -565,12 +567,14 @@
     },
 
     'cfi': {
+      'mixins': ['v8_enable_test_features'],
       'gn_args': ('is_cfi=true use_cfi_cast=true use_cfi_diag=true '
                   'use_cfi_recover=false'),
       'gyp_defines': 'cfi_vptr=1 cfi_diag=1',
     },
 
     'cfi_clusterfuzz': {
+      'mixins': ['v8_enable_test_features'],
       'gn_args': ('is_cfi=true use_cfi_cast=true use_cfi_diag=true '
                   'use_cfi_recover=true'),
       'gyp_defines': 'cfi_vptr=1 cfi_diag=1',
@@ -639,14 +643,13 @@
       'gyp_defines': 'use_goma=1',
     },
 
-    'gyp': {'type': 'gyp'},
-
     'hard_float': {
       'gn_args': 'arm_float_abi="hard"',
       'gyp_defines': 'arm_float_abi=hard',
     },
 
     'lsan': {
+      'mixins': ['v8_enable_test_features'],
       'gn_args': 'is_lsan=true',
       'gyp_defines': 'lsan=1',
     },
@@ -657,16 +660,23 @@
     },
 
     'mips': {
+      'mixins': ['mips_bundled_toolchain'],
       'gn_args': 'target_cpu="mips"',
       'gyp_defines': 'target_arch=mips',
     },
 
+    'mips_bundled_toolchain': {
+      'gn_args': 'custom_toolchain="//tools/toolchain:mips-bundled"',
+    },
+
     'msan': {
+      'mixins': ['v8_enable_test_features'],
       'gn_args': ('is_msan=true msan_track_origins=2 '
                   'use_prebuilt_instrumented_libraries=true'),
     },
 
     'msan_no_origins': {
+      'mixins': ['v8_enable_test_features'],
       'gn_args': ('is_msan=true msan_track_origins=0 '
                   'use_prebuilt_instrumented_libraries=true'),
     },
@@ -756,11 +766,13 @@
     },
 
     'tsan': {
+      'mixins': ['v8_enable_test_features'],
       'gn_args': 'is_tsan=true',
       'gyp_defines': 'clang=1 tsan=1',
     },
 
     'ubsan_vptr': {
+      'mixins': ['v8_enable_test_features'],
       # TODO(krasin): Remove is_ubsan_no_recover=true when
       # https://llvm.org/bugs/show_bug.cgi?id=25569 is fixed and just use
       # ubsan_vptr instead.
@@ -768,6 +780,7 @@
     },
 
     'ubsan_vptr_recover': {
+      'mixins': ['v8_enable_test_features'],
       # Ubsan vptr with recovery.
       'gn_args': 'is_ubsan_vptr=true is_ubsan_no_recover=false',
     },
@@ -782,6 +795,7 @@
     },
 
     'v8_correctness_fuzzer': {
+      'mixins': ['v8_enable_test_features'],
       'gn_args': 'v8_correctness_fuzzer=true v8_multi_arch_build=true',
     },
 
@@ -793,6 +807,10 @@
     'v8_enable_slow_dchecks': {
       'gn_args': 'v8_enable_slow_dchecks=true',
       'gyp_defines': 'v8_enable_slow_dchecks=1',
+    },
+
+    'v8_enable_test_features': {
+      'gn_args': 'v8_enable_test_features=true',
     },
 
     'v8_enable_verify_predictable': {

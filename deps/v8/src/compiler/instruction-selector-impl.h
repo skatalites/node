@@ -206,6 +206,15 @@ class OperandGenerator {
     return op;
   }
 
+  InstructionOperand TempSimd128Register() {
+    UnallocatedOperand op = UnallocatedOperand(
+        UnallocatedOperand::MUST_HAVE_REGISTER,
+        UnallocatedOperand::USED_AT_START, sequence()->NextVirtualRegister());
+    sequence()->MarkAsRepresentation(MachineRepresentation::kSimd128,
+                                     op.virtual_register());
+    return op;
+  }
+
   InstructionOperand TempRegister(Register reg) {
     return UnallocatedOperand(UnallocatedOperand::FIXED_REGISTER, reg.code(),
                               InstructionOperand::kInvalidVirtualRegister);
@@ -251,6 +260,23 @@ class OperandGenerator {
         return Constant(OpParameter<ExternalReference>(node));
       case IrOpcode::kHeapConstant:
         return Constant(OpParameter<Handle<HeapObject>>(node));
+      case IrOpcode::kDeadValue: {
+        switch (DeadValueRepresentationOf(node->op())) {
+          case MachineRepresentation::kBit:
+          case MachineRepresentation::kWord32:
+          case MachineRepresentation::kTagged:
+          case MachineRepresentation::kTaggedSigned:
+          case MachineRepresentation::kTaggedPointer:
+            return Constant(static_cast<int32_t>(0));
+          case MachineRepresentation::kFloat64:
+            return Constant(static_cast<double>(0));
+          case MachineRepresentation::kFloat32:
+            return Constant(static_cast<float>(0));
+          default:
+            UNREACHABLE();
+        }
+        break;
+      }
       default:
         break;
     }
@@ -350,8 +376,9 @@ class FlagsContinuation final {
   static FlagsContinuation ForDeoptimize(FlagsCondition condition,
                                          DeoptimizeKind kind,
                                          DeoptimizeReason reason,
+                                         VectorSlotPair const& feedback,
                                          Node* frame_state) {
-    return FlagsContinuation(condition, kind, reason, frame_state);
+    return FlagsContinuation(condition, kind, reason, feedback, frame_state);
   }
 
   // Creates a new flags continuation for a boolean value.
@@ -381,6 +408,10 @@ class FlagsContinuation final {
   DeoptimizeReason reason() const {
     DCHECK(IsDeoptimize());
     return reason_;
+  }
+  VectorSlotPair const& feedback() const {
+    DCHECK(IsDeoptimize());
+    return feedback_;
   }
   Node* frame_state() const {
     DCHECK(IsDeoptimize());
@@ -452,11 +483,13 @@ class FlagsContinuation final {
 
  private:
   FlagsContinuation(FlagsCondition condition, DeoptimizeKind kind,
-                    DeoptimizeReason reason, Node* frame_state)
+                    DeoptimizeReason reason, VectorSlotPair const& feedback,
+                    Node* frame_state)
       : mode_(kFlags_deoptimize),
         condition_(condition),
         kind_(kind),
         reason_(reason),
+        feedback_(feedback),
         frame_state_or_result_(frame_state) {
     DCHECK_NOT_NULL(frame_state);
   }
@@ -480,6 +513,7 @@ class FlagsContinuation final {
   FlagsCondition condition_;
   DeoptimizeKind kind_;          // Only valid if mode_ == kFlags_deoptimize
   DeoptimizeReason reason_;      // Only valid if mode_ == kFlags_deoptimize
+  VectorSlotPair feedback_;      // Only valid if mode_ == kFlags_deoptimize
   Node* frame_state_or_result_;  // Only valid if mode_ == kFlags_deoptimize
                                  // or mode_ == kFlags_set.
   BasicBlock* true_block_;       // Only valid if mode_ == kFlags_branch.

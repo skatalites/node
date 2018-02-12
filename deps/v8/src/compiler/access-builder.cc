@@ -52,6 +52,14 @@ FieldAccess AccessBuilder::ForHeapNumberValue() {
   return access;
 }
 
+// static
+FieldAccess AccessBuilder::ForBigIntBitfield() {
+  FieldAccess access = {
+      kTaggedBase,        BigInt::kBitfieldOffset, MaybeHandle<Name>(),
+      MaybeHandle<Map>(), TypeCache::Get().kInt32, MachineType::IntPtr(),
+      kNoWriteBarrier};
+  return access;
+}
 
 // static
 FieldAccess AccessBuilder::ForJSObjectPropertiesOrHash() {
@@ -281,12 +289,12 @@ FieldAccess AccessBuilder::ForJSAsyncGeneratorObjectQueue() {
 }
 
 // static
-FieldAccess AccessBuilder::ForJSAsyncGeneratorObjectAwaitedPromise() {
+FieldAccess AccessBuilder::ForJSAsyncGeneratorObjectIsAwaiting() {
   FieldAccess access = {
-      kTaggedBase,         JSAsyncGeneratorObject::kAwaitedPromiseOffset,
+      kTaggedBase,         JSAsyncGeneratorObject::kIsAwaitingOffset,
       Handle<Name>(),      MaybeHandle<Map>(),
-      Type::NonInternal(), MachineType::AnyTagged(),
-      kFullWriteBarrier};
+      Type::SignedSmall(), MachineType::TaggedSigned(),
+      kNoWriteBarrier};
   return access;
 }
 

@@ -337,14 +337,6 @@ Handle<AccessorPair> Factory::NewAccessorPair() {
 }
 
 
-Handle<TypeFeedbackInfo> Factory::NewTypeFeedbackInfo() {
-  Handle<TypeFeedbackInfo> info =
-      Handle<TypeFeedbackInfo>::cast(NewStruct(TUPLE3_TYPE, TENURED));
-  info->initialize_storage();
-  return info;
-}
-
-
 // Internalized strings are created in the old generation (data space).
 Handle<String> Factory::InternalizeUtf8String(Vector<const char> string) {
   Utf8StringKey key(string, isolate()->heap()->HashSeed());
@@ -1003,6 +995,7 @@ Handle<Context> Factory::NewNativeContext() {
   context->set_math_random_index(Smi::kZero);
   Handle<WeakCell> weak_cell = NewWeakCell(context);
   context->set_self_weak_cell(*weak_cell);
+  context->set_serialized_objects(*empty_fixed_array());
   DCHECK(context->IsNativeContext());
   return context;
 }
@@ -1184,7 +1177,7 @@ Handle<Script> Factory::NewScript(Handle<String> source) {
   script->set_type(Script::TYPE_NORMAL);
   script->set_wrapper(heap->undefined_value());
   script->set_line_ends(heap->undefined_value());
-  script->set_eval_from_shared(heap->undefined_value());
+  script->set_eval_from_shared_or_wrapped_arguments(heap->undefined_value());
   script->set_eval_from_position(0);
   script->set_shared_function_infos(*empty_fixed_array(), SKIP_WRITE_BARRIER);
   script->set_flags(0);
@@ -1193,6 +1186,24 @@ Handle<Script> Factory::NewScript(Handle<String> source) {
   return script;
 }
 
+Handle<CallableTask> Factory::NewCallableTask(Handle<JSReceiver> callable,
+                                              Handle<Context> context) {
+  DCHECK(callable->IsCallable());
+  Handle<CallableTask> microtask =
+      Handle<CallableTask>::cast(NewStruct(CALLABLE_TASK_TYPE));
+  microtask->set_callable(*callable);
+  microtask->set_context(*context);
+  return microtask;
+}
+
+Handle<CallbackTask> Factory::NewCallbackTask(Handle<Foreign> callback,
+                                              Handle<Foreign> data) {
+  Handle<CallbackTask> microtask =
+      Handle<CallbackTask>::cast(NewStruct(CALLBACK_TASK_TYPE));
+  microtask->set_callback(*callback);
+  microtask->set_data(*data);
+  return microtask;
+}
 
 Handle<Foreign> Factory::NewForeign(Address addr, PretenureFlag pretenure) {
   CALL_HEAP_FUNCTION(isolate(),
@@ -1881,7 +1892,7 @@ Handle<JSGlobalObject> Factory::NewJSGlobalObject(
   // Create a new map for the global object.
   Handle<Map> new_map = Map::CopyDropDescriptors(map);
   new_map->set_may_have_interesting_symbols(true);
-  new_map->set_dictionary_map(true);
+  new_map->set_is_dictionary_map(true);
 
   // Set up the global object as a normalized object.
   global->set_global_dictionary(*dictionary);
@@ -1985,6 +1996,18 @@ void Factory::NewJSArrayStorage(Handle<JSArray> array,
   array->set_length(Smi::FromInt(length));
 }
 
+Handle<JSWeakMap> Factory::NewJSWeakMap() {
+  Context* native_context = isolate()->raw_native_context();
+  Handle<Map> map(native_context->js_weak_map_fun()->initial_map());
+  Handle<JSWeakMap> weakmap(JSWeakMap::cast(*NewJSObjectFromMap(map)));
+  {
+    // Do not leak handles for the hash table, it would make entries strong.
+    HandleScope scope(isolate());
+    JSWeakCollection::Initialize(weakmap, isolate());
+  }
+  return weakmap;
+}
+
 Handle<JSModuleNamespace> Factory::NewJSModuleNamespace() {
   Handle<Map> map = isolate()->js_module_namespace_map();
   Handle<JSModuleNamespace> module_namespace(
@@ -2074,12 +2097,13 @@ Handle<JSIteratorResult> Factory::NewJSIteratorResult(Handle<Object> value,
 }
 
 Handle<JSAsyncFromSyncIterator> Factory::NewJSAsyncFromSyncIterator(
-    Handle<JSReceiver> sync_iterator) {
+    Handle<JSReceiver> sync_iterator, Handle<Object> next) {
   Handle<Map> map(isolate()->native_context()->async_from_sync_iterator_map());
   Handle<JSAsyncFromSyncIterator> iterator =
       Handle<JSAsyncFromSyncIterator>::cast(NewJSObjectFromMap(map));
 
   iterator->set_sync_iterator(*sync_iterator);
+  iterator->set_next(*next);
   return iterator;
 }
 
@@ -2529,9 +2553,7 @@ Handle<SharedFunctionInfo> Factory::NewSharedFunctionInfo(
   share->set_script(*undefined_value(), SKIP_WRITE_BARRIER);
   share->set_debug_info(Smi::kZero, SKIP_WRITE_BARRIER);
   share->set_function_identifier(*undefined_value(), SKIP_WRITE_BARRIER);
-  StaticFeedbackVectorSpec empty_spec;
-  Handle<FeedbackMetadata> feedback_metadata =
-      FeedbackMetadata::New(isolate(), &empty_spec);
+  Handle<FeedbackMetadata> feedback_metadata = FeedbackMetadata::New(isolate());
   share->set_feedback_metadata(*feedback_metadata, SKIP_WRITE_BARRIER);
   share->set_function_literal_id(FunctionLiteral::kIdTypeInvalid);
 #if V8_SFI_HAS_UNIQUE_ID
@@ -2696,7 +2718,7 @@ Handle<StackFrameInfo> Factory::NewStackFrameInfo() {
 Handle<SourcePositionTableWithFrameCache>
 Factory::NewSourcePositionTableWithFrameCache(
     Handle<ByteArray> source_position_table,
-    Handle<NumberDictionary> stack_frame_cache) {
+    Handle<SimpleNumberDictionary> stack_frame_cache) {
   Handle<SourcePositionTableWithFrameCache>
       source_position_table_with_frame_cache =
           Handle<SourcePositionTableWithFrameCache>::cast(
@@ -2775,6 +2797,46 @@ Handle<Map> Factory::ObjectLiteralMapFromCache(Handle<Context> native_context,
   return map;
 }
 
+Handle<LoadHandler> Factory::NewLoadHandler(int data_count) {
+  Handle<Map> map;
+  switch (data_count) {
+    case 1:
+      map = load_handler1_map();
+      break;
+    case 2:
+      map = load_handler2_map();
+      break;
+    case 3:
+      map = load_handler3_map();
+      break;
+    default:
+      UNREACHABLE();
+      break;
+  }
+  return New<LoadHandler>(map, OLD_SPACE);
+}
+
+Handle<StoreHandler> Factory::NewStoreHandler(int data_count) {
+  Handle<Map> map;
+  switch (data_count) {
+    case 0:
+      map = store_handler0_map();
+      break;
+    case 1:
+      map = store_handler1_map();
+      break;
+    case 2:
+      map = store_handler2_map();
+      break;
+    case 3:
+      map = store_handler3_map();
+      break;
+    default:
+      UNREACHABLE();
+      break;
+  }
+  return New<StoreHandler>(map, OLD_SPACE);
+}
 
 void Factory::SetRegExpAtomData(Handle<JSRegExp> regexp,
                                 JSRegExp::Type type,
@@ -2866,7 +2928,7 @@ Handle<Map> Factory::CreateSloppyFunctionMap(
       TERMINAL_FAST_ELEMENTS_KIND, inobject_properties_count);
   map->set_has_prototype_slot(has_prototype);
   map->set_is_constructor(has_prototype);
-  map->set_is_callable();
+  map->set_is_callable(true);
   Handle<JSFunction> empty_function;
   if (maybe_empty_function.ToHandle(&empty_function)) {
     Map::SetPrototype(map, empty_function);
@@ -2945,7 +3007,7 @@ Handle<Map> Factory::CreateStrictFunctionMap(
       TERMINAL_FAST_ELEMENTS_KIND, inobject_properties_count);
   map->set_has_prototype_slot(has_prototype);
   map->set_is_constructor(has_prototype);
-  map->set_is_callable();
+  map->set_is_callable(true);
   Map::SetPrototype(map, empty_function);
 
   //
@@ -3010,7 +3072,7 @@ Handle<Map> Factory::CreateClassFunctionMap(Handle<JSFunction> empty_function) {
   map->set_has_prototype_slot(true);
   map->set_is_constructor(true);
   map->set_is_prototype_map(true);
-  map->set_is_callable();
+  map->set_is_callable(true);
   Map::SetPrototype(map, empty_function);
 
   //

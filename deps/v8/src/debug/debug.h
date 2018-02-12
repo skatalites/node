@@ -51,13 +51,14 @@ enum ExceptionBreakType {
   BreakUncaughtException = 1
 };
 
-
 enum DebugBreakType {
   NOT_DEBUG_BREAK,
   DEBUGGER_STATEMENT,
   DEBUG_BREAK_SLOT,
   DEBUG_BREAK_SLOT_AT_CALL,
   DEBUG_BREAK_SLOT_AT_RETURN,
+  DEBUG_BREAK_SLOT_AT_SUSPEND,
+  DEBUG_BREAK_AT_ENTRY,
 };
 
 enum IgnoreBreakMode {
@@ -74,11 +75,19 @@ class BreakLocation {
                                     JavaScriptFrame* frame,
                                     std::vector<BreakLocation>* result_out);
 
+  inline bool IsSuspend() const { return type_ == DEBUG_BREAK_SLOT_AT_SUSPEND; }
   inline bool IsReturn() const { return type_ == DEBUG_BREAK_SLOT_AT_RETURN; }
+  inline bool IsReturnOrSuspend() const {
+    return type_ >= DEBUG_BREAK_SLOT_AT_RETURN;
+  }
   inline bool IsCall() const { return type_ == DEBUG_BREAK_SLOT_AT_CALL; }
   inline bool IsDebugBreakSlot() const { return type_ >= DEBUG_BREAK_SLOT; }
   inline bool IsDebuggerStatement() const {
     return type_ == DEBUGGER_STATEMENT;
+  }
+  inline bool IsDebugBreakAtEntry() const {
+    bool result = type_ == DEBUG_BREAK_AT_ENTRY;
+    return result;
   }
 
   bool HasBreakPoint(Handle<DebugInfo> debug_info) const;
@@ -87,15 +96,25 @@ class BreakLocation {
 
   debug::BreakLocationType type() const;
 
+  JSGeneratorObject* GetGeneratorObjectForSuspendedFrame(
+      JavaScriptFrame* frame) const;
+
  private:
   BreakLocation(Handle<AbstractCode> abstract_code, DebugBreakType type,
-                int code_offset, int position)
+                int code_offset, int position, int generator_obj_reg_index)
       : abstract_code_(abstract_code),
         code_offset_(code_offset),
         type_(type),
-        position_(position) {
+        position_(position),
+        generator_obj_reg_index_(generator_obj_reg_index) {
     DCHECK_NE(NOT_DEBUG_BREAK, type_);
   }
+
+  BreakLocation(int position, DebugBreakType type)
+      : code_offset_(0),
+        type_(type),
+        position_(position),
+        generator_obj_reg_index_(0) {}
 
   static int BreakIndexFromCodeOffset(Handle<DebugInfo> debug_info,
                                       Handle<AbstractCode> abstract_code,
@@ -108,6 +127,7 @@ class BreakLocation {
   int code_offset_;
   DebugBreakType type_;
   int position_;
+  int generator_obj_reg_index_;
 
   friend class BreakIterator;
 };
@@ -215,7 +235,9 @@ class Debug {
 
   // Internal logic
   bool Load();
-  void Break(JavaScriptFrame* frame);
+  // The break target may not be the top-most frame, since we may be
+  // breaking before entering a function that cannot contain break points.
+  void Break(JavaScriptFrame* frame, Handle<JSFunction> break_target);
 
   // Scripts handling.
   Handle<FixedArray> GetLoadedScripts();
@@ -256,14 +278,14 @@ class Debug {
                               int end_position, bool restrict_to_function,
                               std::vector<BreakLocation>* locations);
 
-  void RecordGenerator(Handle<JSGeneratorObject> generator_object);
-
   void RunPromiseHook(PromiseHookType hook_type, Handle<JSPromise> promise,
                       Handle<Object> parent);
 
   int NextAsyncTaskId(Handle<JSObject> promise);
 
   bool IsBlackboxed(Handle<SharedFunctionInfo> shared);
+
+  bool CanBreakAtEntry(Handle<SharedFunctionInfo> shared);
 
   void SetDebugDelegate(debug::DebugDelegate* delegate, bool pass_ownership);
 
@@ -375,6 +397,10 @@ class Debug {
   StepAction last_step_action() { return thread_local_.last_step_action_; }
 
   DebugFeatureTracker* feature_tracker() { return &feature_tracker_; }
+
+  // For functions in which we cannot set a break point, use a canonical
+  // source position for break points.
+  static const int kBreakAtEntryPosition = 0;
 
  private:
   explicit Debug(Isolate* isolate);

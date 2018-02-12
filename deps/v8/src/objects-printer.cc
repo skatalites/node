@@ -16,6 +16,8 @@
 #include "src/ostreams.h"
 #include "src/regexp/jsregexp.h"
 #include "src/transitions-inl.h"
+#include "src/wasm/wasm-code-manager.h"
+#include "src/wasm/wasm-engine.h"
 #include "src/wasm/wasm-objects-inl.h"
 
 namespace v8 {
@@ -238,6 +240,14 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
     break;
   STRUCT_LIST(MAKE_STRUCT_CASE)
 #undef MAKE_STRUCT_CASE
+
+    case LOAD_HANDLER_TYPE:
+      LoadHandler::cast(this)->LoadHandlerPrint(os);
+      break;
+
+    case STORE_HANDLER_TYPE:
+      StoreHandler::cast(this)->StoreHandlerPrint(os);
+      break;
 
     default:
       os << "UNKNOWN TYPE " << map()->instance_type();
@@ -542,12 +552,11 @@ void JSArray::JSArrayPrint(std::ostream& os) {  // NOLINT
 void JSPromise::JSPromisePrint(std::ostream& os) {  // NOLINT
   JSObjectPrintHeader(os, this, "JSPromise");
   os << "\n - status = " << JSPromise::Status(status());
-  os << "\n - result = " << Brief(result());
-  os << "\n - deferred_promise: " << Brief(deferred_promise());
-  os << "\n - deferred_on_resolve: " << Brief(deferred_on_resolve());
-  os << "\n - deferred_on_reject: " << Brief(deferred_on_reject());
-  os << "\n - fulfill_reactions = " << Brief(fulfill_reactions());
-  os << "\n - reject_reactions = " << Brief(reject_reactions());
+  if (status() == Promise::kPending) {
+    os << "\n - reactions = " << Brief(reactions());
+  } else {
+    os << "\n - result = " << Brief(result());
+  }
   os << "\n - has_handler = " << has_handler();
   os << "\n ";
 }
@@ -679,20 +688,16 @@ void TransitionArray::TransitionArrayPrint(std::ostream& os) {  // NOLINT
   os << "\n";
 }
 
-template void FeedbackVectorSpecBase<StaticFeedbackVectorSpec>::Print();
-template void FeedbackVectorSpecBase<FeedbackVectorSpec>::Print();
-
-template <typename Derived>
-void FeedbackVectorSpecBase<Derived>::Print() {
+void FeedbackVectorSpec::Print() {
   OFStream os(stdout);
+
   FeedbackVectorSpecPrint(os);
+
   os << std::flush;
 }
 
-template <typename Derived>
-void FeedbackVectorSpecBase<Derived>::FeedbackVectorSpecPrint(
-    std::ostream& os) {  // NOLINT
-  int slot_count = This()->slots();
+void FeedbackVectorSpec::FeedbackVectorSpecPrint(std::ostream& os) {  // NOLINT
+  int slot_count = slots();
   os << " - slot_count: " << slot_count;
   if (slot_count == 0) {
     os << " (empty)\n";
@@ -700,7 +705,7 @@ void FeedbackVectorSpecBase<Derived>::FeedbackVectorSpecPrint(
   }
 
   for (int slot = 0; slot < slot_count;) {
-    FeedbackSlotKind kind = This()->GetKind(FeedbackSlot(slot));
+    FeedbackSlotKind kind = GetKind(FeedbackSlot(slot));
     int entry_size = FeedbackMetadata::GetSlotSize(kind);
     DCHECK_LT(0, entry_size);
     os << "\n Slot #" << slot << " " << kind;
@@ -747,95 +752,93 @@ void FeedbackVector::FeedbackVectorPrint(std::ostream& os) {  // NOLINT
     return;
   }
 
-  os << "\n SharedFunctionInfo: " << Brief(shared_function_info());
-  os << "\n Optimized Code: " << Brief(optimized_code_cell());
-  os << "\n Invocation Count: " << invocation_count();
-  os << "\n Profiler Ticks: " << profiler_ticks();
+  os << "\n - shared function info: " << Brief(shared_function_info());
+  os << "\n - optimized code/marker: ";
+  if (has_optimized_code()) {
+    os << Brief(optimized_code());
+  } else {
+    os << optimization_marker();
+  }
+  os << "\n - invocation count: " << invocation_count();
+  os << "\n - profiler ticks: " << profiler_ticks();
 
   FeedbackMetadataIterator iter(metadata());
   while (iter.HasNext()) {
     FeedbackSlot slot = iter.Next();
     FeedbackSlotKind kind = iter.kind();
 
-    os << "\n Slot " << slot << " " << kind << " ";
-    FeedbackSlotPrint(os, slot, kind);
+    os << "\n - slot " << slot << " " << kind << " ";
+    FeedbackSlotPrint(os, slot);
 
     int entry_size = iter.entry_size();
+    if (entry_size > 0) os << " {";
     for (int i = 0; i < entry_size; i++) {
       int index = GetIndex(slot) + i;
-      os << "\n  [" << index << "]: " << Brief(get(index));
+      os << "\n     [" << index << "]: " << Brief(get(index));
     }
+    if (entry_size > 0) os << "\n  }";
   }
   os << "\n";
 }
 
 void FeedbackVector::FeedbackSlotPrint(std::ostream& os,
                                        FeedbackSlot slot) {  // NOLINT
-  FeedbackSlotPrint(os, slot, GetKind(slot));
+  FeedbackNexus nexus(this, slot);
+  nexus.Print(os);
 }
 
-void FeedbackVector::FeedbackSlotPrint(std::ostream& os, FeedbackSlot slot,
-                                       FeedbackSlotKind kind) {  // NOLINT
-  switch (kind) {
-    case FeedbackSlotKind::kLoadProperty: {
-      LoadICNexus nexus(this, slot);
-      os << Code::ICState2String(nexus.StateFromFeedback());
-      break;
-    }
+namespace {
+
+const char* ICState2String(InlineCacheState state) {
+  switch (state) {
+    case UNINITIALIZED:
+      return "UNINITIALIZED";
+    case PREMONOMORPHIC:
+      return "PREMONOMORPHIC";
+    case MONOMORPHIC:
+      return "MONOMORPHIC";
+    case RECOMPUTE_HANDLER:
+      return "RECOMPUTE_HANDLER";
+    case POLYMORPHIC:
+      return "POLYMORPHIC";
+    case MEGAMORPHIC:
+      return "MEGAMORPHIC";
+    case GENERIC:
+      return "GENERIC";
+  }
+  UNREACHABLE();
+}
+}  // anonymous namespace
+
+void FeedbackNexus::Print(std::ostream& os) {  // NOLINT
+  switch (kind()) {
+    case FeedbackSlotKind::kCall:
+    case FeedbackSlotKind::kLoadProperty:
+    case FeedbackSlotKind::kLoadKeyed:
     case FeedbackSlotKind::kLoadGlobalInsideTypeof:
-    case FeedbackSlotKind::kLoadGlobalNotInsideTypeof: {
-      LoadGlobalICNexus nexus(this, slot);
-      os << Code::ICState2String(nexus.StateFromFeedback());
-      break;
-    }
-    case FeedbackSlotKind::kLoadKeyed: {
-      KeyedLoadICNexus nexus(this, slot);
-      os << Code::ICState2String(nexus.StateFromFeedback());
-      break;
-    }
-    case FeedbackSlotKind::kCall: {
-      CallICNexus nexus(this, slot);
-      os << Code::ICState2String(nexus.StateFromFeedback());
-      break;
-    }
+    case FeedbackSlotKind::kLoadGlobalNotInsideTypeof:
     case FeedbackSlotKind::kStoreNamedSloppy:
     case FeedbackSlotKind::kStoreNamedStrict:
     case FeedbackSlotKind::kStoreOwnNamed:
     case FeedbackSlotKind::kStoreGlobalSloppy:
-    case FeedbackSlotKind::kStoreGlobalStrict: {
-      StoreICNexus nexus(this, slot);
-      os << Code::ICState2String(nexus.StateFromFeedback());
-      break;
-    }
+    case FeedbackSlotKind::kStoreGlobalStrict:
     case FeedbackSlotKind::kStoreKeyedSloppy:
+    case FeedbackSlotKind::kInstanceOf:
+    case FeedbackSlotKind::kStoreDataPropertyInLiteral:
     case FeedbackSlotKind::kStoreKeyedStrict: {
-      KeyedStoreICNexus nexus(this, slot);
-      os << Code::ICState2String(nexus.StateFromFeedback());
+      os << ICState2String(StateFromFeedback());
       break;
     }
     case FeedbackSlotKind::kBinaryOp: {
-      BinaryOpICNexus nexus(this, slot);
-      os << "BinaryOp:" << nexus.GetBinaryOperationFeedback();
+      os << "BinaryOp:" << GetBinaryOperationFeedback();
       break;
     }
     case FeedbackSlotKind::kCompareOp: {
-      CompareICNexus nexus(this, slot);
-      os << "CompareOp:" << nexus.GetCompareOperationFeedback();
+      os << "CompareOp:" << GetCompareOperationFeedback();
       break;
     }
     case FeedbackSlotKind::kForIn: {
-      ForInICNexus nexus(this, slot);
-      os << "ForIn:" << nexus.GetForInFeedback();
-      break;
-    }
-    case FeedbackSlotKind::kInstanceOf: {
-      InstanceOfICNexus nexus(this, slot);
-      os << Code::ICState2String(nexus.StateFromFeedback());
-      break;
-    }
-    case FeedbackSlotKind::kStoreDataPropertyInLiteral: {
-      StoreDataPropertyInLiteralICNexus nexus(this, slot);
-      os << Code::ICState2String(nexus.StateFromFeedback());
+      os << "ForIn:" << GetForInFeedback();
       break;
     }
     case FeedbackSlotKind::kCreateClosure:
@@ -1103,6 +1106,21 @@ void JSFunction::JSFunctionPrint(std::ostream& os) {  // NOLINT
   }
   os << "\n - shared_info = " << Brief(shared());
   os << "\n - name = " << Brief(shared()->name());
+
+  // Print Builtin name for builtin functions
+  int builtin_index = code()->builtin_index();
+  if (builtin_index != -1 && !IsInterpreted()) {
+    if (builtin_index == Builtins::kDeserializeLazy) {
+      if (shared()->HasLazyDeserializationBuiltinId()) {
+        builtin_index = shared()->lazy_deserialization_builtin_id();
+        os << "\n - builtin: " << GetIsolate()->builtins()->name(builtin_index)
+           << "(lazy)";
+      }
+    } else {
+      os << "\n - builtin: " << GetIsolate()->builtins()->name(builtin_index);
+    }
+  }
+
   os << "\n - formal_parameter_count = "
      << shared()->internal_formal_parameter_count();
   os << "\n - kind = " << shared()->kind();
@@ -1321,6 +1339,50 @@ void AccessorInfo::AccessorInfoPrint(std::ostream& os) {  // NOLINT
   os << "\n";
 }
 
+void CallbackTask::CallbackTaskPrint(std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "CallbackTask");
+  os << "\n - callback: " << Brief(callback());
+  os << "\n - data: " << Brief(data());
+  os << "\n";
+}
+
+void CallableTask::CallableTaskPrint(std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "CallableTask");
+  os << "\n - context: " << Brief(context());
+  os << "\n - callable: " << Brief(callable());
+  os << "\n";
+}
+
+void PromiseFulfillReactionJobTask::PromiseFulfillReactionJobTaskPrint(
+    std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "PromiseFulfillReactionJobTask");
+  os << "\n - argument: " << Brief(argument());
+  os << "\n - context: " << Brief(context());
+  os << "\n - handler: " << Brief(handler());
+  os << "\n - promise_or_capability: " << Brief(promise_or_capability());
+  os << "\n";
+}
+
+void PromiseRejectReactionJobTask::PromiseRejectReactionJobTaskPrint(
+    std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "PromiseRejectReactionJobTask");
+  os << "\n - argument: " << Brief(argument());
+  os << "\n - context: " << Brief(context());
+  os << "\n - handler: " << Brief(handler());
+  os << "\n - promise_or_capability: " << Brief(promise_or_capability());
+  os << "\n";
+}
+
+void PromiseResolveThenableJobTask::PromiseResolveThenableJobTaskPrint(
+    std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "PromiseResolveThenableJobTask");
+  os << "\n - context: " << Brief(context());
+  os << "\n - promise_to_resolve: " << Brief(promise_to_resolve());
+  os << "\n - then: " << Brief(then());
+  os << "\n - thenable: " << Brief(thenable());
+  os << "\n";
+}
+
 void PromiseCapability::PromiseCapabilityPrint(std::ostream& os) {  // NOLINT
   HeapObject::PrintHeader(os, "PromiseCapability");
   os << "\n - promise: " << Brief(promise());
@@ -1329,26 +1391,12 @@ void PromiseCapability::PromiseCapabilityPrint(std::ostream& os) {  // NOLINT
   os << "\n";
 }
 
-void PromiseResolveThenableJobInfo::PromiseResolveThenableJobInfoPrint(
-    std::ostream& os) {  // NOLINT
-  HeapObject::PrintHeader(os, "PromiseResolveThenableJobInfo");
-  os << "\n - thenable: " << Brief(thenable());
-  os << "\n - then: " << Brief(then());
-  os << "\n - resolve: " << Brief(resolve());
-  os << "\n - reject: " << Brief(reject());
-  os << "\n - context: " << Brief(context());
-  os << "\n";
-}
-
-void PromiseReactionJobInfo::PromiseReactionJobInfoPrint(
-    std::ostream& os) {  // NOLINT
-  HeapObject::PrintHeader(os, "PromiseReactionJobInfo");
-  os << "\n - value: " << Brief(value());
-  os << "\n - tasks: " << Brief(tasks());
-  os << "\n - deferred_promise: " << Brief(deferred_promise());
-  os << "\n - deferred_on_resolve: " << Brief(deferred_on_resolve());
-  os << "\n - deferred_on_reject: " << Brief(deferred_on_reject());
-  os << "\n - reaction context: " << Brief(context());
+void PromiseReaction::PromiseReactionPrint(std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "PromiseReaction");
+  os << "\n - next: " << Brief(next());
+  os << "\n - reject_handler: " << Brief(reject_handler());
+  os << "\n - fulfill_handler: " << Brief(fulfill_handler());
+  os << "\n - promise_or_capability: " << Brief(promise_or_capability());
   os << "\n";
 }
 
@@ -1427,6 +1475,42 @@ void Tuple3::Tuple3Print(std::ostream& os) {  // NOLINT
   os << "\n - value1: " << Brief(value1());
   os << "\n - value2: " << Brief(value2());
   os << "\n - value3: " << Brief(value3());
+  os << "\n";
+}
+
+void LoadHandler::LoadHandlerPrint(std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "LoadHandler");
+  // TODO(ishell): implement printing based on handler kind
+  os << "\n - handler: " << Brief(smi_handler());
+  os << "\n - validity_cell: " << Brief(validity_cell());
+  int data_count = data_field_count();
+  if (data_count >= 1) {
+    os << "\n - data1: " << Brief(data1());
+  }
+  if (data_count >= 2) {
+    os << "\n - data2: " << Brief(data2());
+  }
+  if (data_count >= 3) {
+    os << "\n - data3: " << Brief(data3());
+  }
+  os << "\n";
+}
+
+void StoreHandler::StoreHandlerPrint(std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "StoreHandler");
+  // TODO(ishell): implement printing based on handler kind
+  os << "\n - handler: " << Brief(smi_handler());
+  os << "\n - validity_cell: " << Brief(validity_cell());
+  int data_count = data_field_count();
+  if (data_count >= 1) {
+    os << "\n - data1: " << Brief(data1());
+  }
+  if (data_count >= 2) {
+    os << "\n - data2: " << Brief(data2());
+  }
+  if (data_count >= 3) {
+    os << "\n - data3: " << Brief(data3());
+  }
   os << "\n";
 }
 
@@ -1552,7 +1636,12 @@ void Script::ScriptPrint(std::ostream& os) {  // NOLINT
   os << "\n - wrapper: " << Brief(wrapper());
   os << "\n - compilation type: " << compilation_type();
   os << "\n - line ends: " << Brief(line_ends());
-  os << "\n - eval from shared: " << Brief(eval_from_shared());
+  if (has_eval_from_shared()) {
+    os << "\n - eval from shared: " << Brief(eval_from_shared());
+  }
+  if (is_wrapped()) {
+    os << "\n - wrapped arguments: " << Brief(wrapped_arguments());
+  }
   os << "\n - eval from position: " << eval_from_position();
   os << "\n - shared function infos: " << Brief(shared_function_infos());
   os << "\n";
@@ -1888,8 +1977,36 @@ extern void _v8_internal_Print_Object(void* object) {
 }
 
 extern void _v8_internal_Print_Code(void* object) {
+  i::Address address = reinterpret_cast<i::Address>(object);
   i::Isolate* isolate = i::Isolate::Current();
-  isolate->FindCodeObject(reinterpret_cast<i::Address>(object))->Print();
+
+  i::wasm::WasmCode* wasm_code =
+      isolate->wasm_engine()->code_manager()->LookupCode(address);
+  if (wasm_code) {
+    wasm_code->Print(isolate);
+    return;
+  }
+
+  if (!isolate->heap()->InSpaceSlow(address, i::CODE_SPACE) &&
+      !isolate->heap()->InSpaceSlow(address, i::LO_SPACE)) {
+    i::PrintF(
+        "%p is not within the current isolate's large object or code spaces\n",
+        static_cast<void*>(address));
+    return;
+  }
+
+  i::Code* code = isolate->FindCodeObject(address);
+  if (!code->IsCode()) {
+    i::PrintF("No code object found containing %p\n",
+              static_cast<void*>(address));
+    return;
+  }
+#ifdef ENABLE_DISASSEMBLER
+  i::OFStream os(stdout);
+  code->Disassemble(nullptr, os, address);
+#else   // ENABLE_DISASSEMBLER
+  code->Print();
+#endif  // ENABLE_DISASSEMBLER
 }
 
 extern void _v8_internal_Print_FeedbackMetadata(void* object) {

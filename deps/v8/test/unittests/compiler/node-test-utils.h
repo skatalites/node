@@ -272,6 +272,7 @@ Matcher<Node*> IsNumberTan(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsNumberTanh(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsNumberTrunc(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsStringFromCharCode(const Matcher<Node*>& value_matcher);
+Matcher<Node*> IsStringLength(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsAllocate(const Matcher<Node*>& size_matcher,
                           const Matcher<Node*>& effect_matcher,
                           const Matcher<Node*>& control_matcher);
@@ -335,6 +336,7 @@ Matcher<Node*> IsUnalignedStore(
     const Matcher<Node*>& value_matcher, const Matcher<Node*>& effect_matcher,
     const Matcher<Node*>& control_matcher);
 Matcher<Node*> IsStackSlot(const Matcher<StackSlotRepresentation>& rep_matcher);
+Matcher<Node*> IsWord32Popcnt(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsWord32And(const Matcher<Node*>& lhs_matcher,
                            const Matcher<Node*>& rhs_matcher);
 Matcher<Node*> IsWord32Or(const Matcher<Node*>& lhs_matcher,

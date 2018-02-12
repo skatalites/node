@@ -43,8 +43,6 @@ const Register LoadDescriptor::SlotRegister() { return r2; }
 
 const Register LoadWithVectorDescriptor::VectorRegister() { return r5; }
 
-const Register LoadICProtoArrayDescriptor::HandlerRegister() { return r6; }
-
 const Register StoreDescriptor::ReceiverRegister() { return r3; }
 const Register StoreDescriptor::NameRegister() { return r4; }
 const Register StoreDescriptor::ValueRegister() { return r2; }
@@ -198,6 +196,12 @@ void TransitionElementsKindDescriptor::InitializePlatformSpecific(
   data->InitializePlatformSpecific(arraysize(registers), registers);
 }
 
+void AbortJSDescriptor::InitializePlatformSpecific(
+    CallInterfaceDescriptorData* data) {
+  Register registers[] = {r3};
+  data->InitializePlatformSpecific(arraysize(registers), registers);
+}
+
 void AllocateHeapNumberDescriptor::InitializePlatformSpecific(
     CallInterfaceDescriptorData* data) {
   data->InitializePlatformSpecific(0, nullptr, nullptr);
@@ -281,7 +285,8 @@ void InterpreterDispatchDescriptor::InitializePlatformSpecific(
     CallInterfaceDescriptorData* data) {
   Register registers[] = {
       kInterpreterAccumulatorRegister, kInterpreterBytecodeOffsetRegister,
-      kInterpreterBytecodeArrayRegister, kInterpreterDispatchTableRegister};
+      kInterpreterBytecodeArrayRegister, kInterpreterDispatchTableRegister,
+      kInterpreterTargetBytecodeRegister};
   data->InitializePlatformSpecific(arraysize(registers), registers);
 }
 

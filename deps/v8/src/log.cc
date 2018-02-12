@@ -16,6 +16,7 @@
 #include "src/counters.h"
 #include "src/deoptimizer.h"
 #include "src/global-handles.h"
+#include "src/instruction-stream.h"
 #include "src/interpreter/bytecodes.h"
 #include "src/interpreter/interpreter.h"
 #include "src/libsampler/sampler.h"
@@ -207,6 +208,13 @@ void CodeEventLogger::RegExpCodeCreateEvent(AbstractCode* code,
   LogRecordedBuffer(code, nullptr, name_buffer_->get(), name_buffer_->size());
 }
 
+void CodeEventLogger::InstructionStreamCreateEvent(
+    LogEventsAndTags tag, const InstructionStream* stream,
+    const char* description) {
+  name_buffer_->Init(tag);
+  name_buffer_->AppendBytes(description);
+  LogRecordedBuffer(stream, name_buffer_->get(), name_buffer_->size());
+}
 
 // Linux perf tool logging support
 class PerfBasicLogger : public CodeEventLogger {
@@ -221,6 +229,8 @@ class PerfBasicLogger : public CodeEventLogger {
  private:
   void LogRecordedBuffer(AbstractCode* code, SharedFunctionInfo* shared,
                          const char* name, int length) override;
+  void LogRecordedBuffer(const InstructionStream* stream, const char* name,
+                         int length) override;
 
   // Extension added to V8 log file name to get the low-level log name.
   static const char kFilenameFormatString[];
@@ -273,6 +283,19 @@ void PerfBasicLogger::LogRecordedBuffer(AbstractCode* code, SharedFunctionInfo*,
                    code->instruction_size(), length, name);
 }
 
+void PerfBasicLogger::LogRecordedBuffer(const InstructionStream* stream,
+                                        const char* name, int length) {
+  // Linux perf expects hex literals without a leading 0x, while some
+  // implementations of printf might prepend one when using the %p format
+  // for pointers, leading to wrongly formatted JIT symbols maps.
+  //
+  // Instead, we use V8PRIxPTR format string and cast pointer to uintpr_t,
+  // so that we have control over the exact output format.
+  base::OS::FPrint(perf_output_handle_, "%" V8PRIxPTR " %x %.*s\n",
+                   reinterpret_cast<uintptr_t>(stream->bytes()),
+                   static_cast<int>(stream->byte_length()), length, name);
+}
+
 // Low-level logging support.
 #define LL_LOG(Call) if (ll_logger_) ll_logger_->Call;
 
@@ -290,6 +313,8 @@ class LowLevelLogger : public CodeEventLogger {
  private:
   void LogRecordedBuffer(AbstractCode* code, SharedFunctionInfo* shared,
                          const char* name, int length) override;
+  void LogRecordedBuffer(const InstructionStream* stream, const char* name,
+                         int length) override;
 
   // Low-level profiling event structures.
   struct CodeCreateStruct {
@@ -386,6 +411,18 @@ void LowLevelLogger::LogRecordedBuffer(AbstractCode* code, SharedFunctionInfo*,
       code->instruction_size());
 }
 
+void LowLevelLogger::LogRecordedBuffer(const InstructionStream* stream,
+                                       const char* name, int length) {
+  CodeCreateStruct event;
+  event.name_size = length;
+  event.code_address = stream->bytes();
+  event.code_size = static_cast<int32_t>(stream->byte_length());
+  LogWriteStruct(event);
+  LogWriteBytes(name, length);
+  LogWriteBytes(reinterpret_cast<const char*>(stream->bytes()),
+                static_cast<int>(stream->byte_length()));
+}
+
 void LowLevelLogger::CodeMoveEvent(AbstractCode* from, Address to) {
   CodeMoveStruct event;
   event.from_address = from->instruction_start();
@@ -425,6 +462,8 @@ class JitLogger : public CodeEventLogger {
  private:
   void LogRecordedBuffer(AbstractCode* code, SharedFunctionInfo* shared,
                          const char* name, int length) override;
+  void LogRecordedBuffer(const InstructionStream* stream, const char* name,
+                         int length) override;
 
   JitCodeEventHandler code_event_handler_;
   base::Mutex logger_mutex_;
@@ -447,6 +486,20 @@ void JitLogger::LogRecordedBuffer(AbstractCode* code,
   if (shared && shared->script()->IsScript()) {
     shared_function_handle = Handle<SharedFunctionInfo>(shared);
   }
+  event.script = ToApiHandle<v8::UnboundScript>(shared_function_handle);
+  event.name.str = name;
+  event.name.len = length;
+  code_event_handler_(&event);
+}
+
+void JitLogger::LogRecordedBuffer(const InstructionStream* stream,
+                                  const char* name, int length) {
+  JitCodeEvent event;
+  memset(&event, 0, sizeof(event));
+  event.type = JitCodeEvent::CODE_ADDED;
+  event.code_start = stream->bytes();
+  event.code_len = stream->byte_length();
+  Handle<SharedFunctionInfo> shared_function_handle;
   event.script = ToApiHandle<v8::UnboundScript>(shared_function_handle);
   event.name.str = name;
   event.name.len = length;
@@ -987,6 +1040,18 @@ void AppendCodeCreateHeader(Log::MessageBuilder& msg,
       << code->instruction_size() << Logger::kNext;
 }
 
+void AppendCodeCreateHeader(Log::MessageBuilder& msg,
+                            CodeEventListener::LogEventsAndTags tag,
+                            const InstructionStream* stream,
+                            base::ElapsedTimer* timer) {
+  // TODO(jgruber,v8:6666): In time, we'll need to support non-builtin streams.
+  msg << kLogEventsNames[CodeEventListener::CODE_CREATION_EVENT]
+      << Logger::kNext << kLogEventsNames[tag] << Logger::kNext << Code::BUILTIN
+      << Logger::kNext << timer->Elapsed().InMicroseconds() << Logger::kNext
+      << reinterpret_cast<void*>(stream->bytes()) << Logger::kNext
+      << stream->byte_length() << Logger::kNext;
+}
+
 }  // namespace
 
 void Logger::CodeCreateEvent(CodeEventListener::LogEventsAndTags tag,
@@ -1049,27 +1114,25 @@ void Logger::CodeCreateEvent(CodeEventListener::LogEventsAndTags tag,
   // Make sure the script is written to the log file.
   Script* script = Script::cast(script_object);
   int script_id = script->id();
-  if (logged_source_code_.find(script_id) != logged_source_code_.end()) {
-    return;
-  }
+  if (logged_source_code_.find(script_id) == logged_source_code_.end()) {
+    // This script has not been logged yet.
+    logged_source_code_.insert(script_id);
+    Object* source_object = script->source();
+    if (source_object->IsString()) {
+      String* source_code = String::cast(source_object);
+      msg << "script" << kNext << script_id << kNext;
 
-  // This script has not been logged yet.
-  logged_source_code_.insert(script_id);
-  Object* source_object = script->source();
-  if (source_object->IsString()) {
-    String* source_code = String::cast(source_object);
-    msg << "script" << kNext << script_id << kNext;
+      // Log the script name.
+      if (script->name()->IsString()) {
+        msg << String::cast(script->name()) << kNext;
+      } else {
+        msg << "<unknown>" << kNext;
+      }
 
-    // Log the script name.
-    if (script->name()->IsString()) {
-      msg << String::cast(script->name()) << kNext;
-    } else {
-      msg << "<unknown>" << kNext;
+      // Log the source code.
+      msg << source_code;
+      msg.WriteToLogFile();
     }
-
-    // Log the source code.
-    msg << source_code;
-    msg.WriteToLogFile();
   }
 
   // We log source code information in the form:
@@ -1173,6 +1236,17 @@ void Logger::RegExpCodeCreateEvent(AbstractCode* code, String* source) {
   Log::MessageBuilder msg(log_);
   AppendCodeCreateHeader(msg, CodeEventListener::REG_EXP_TAG, code, &timer_);
   msg << source;
+  msg.WriteToLogFile();
+}
+
+void Logger::InstructionStreamCreateEvent(LogEventsAndTags tag,
+                                          const InstructionStream* stream,
+                                          const char* description) {
+  if (!is_logging_code_events()) return;
+  if (!FLAG_log_code || !log_->IsEnabled()) return;
+  Log::MessageBuilder msg(log_);
+  AppendCodeCreateHeader(msg, tag, stream, &timer_);
+  msg << description;
   msg.WriteToLogFile();
 }
 
@@ -1294,34 +1368,6 @@ void Logger::FunctionEvent(const char* reason, Script* script, int script_id,
   msg.WriteToLogFile();
 }
 
-void Logger::HeapSampleBeginEvent(const char* space, const char* kind) {
-  if (!log_->IsEnabled() || !FLAG_log_gc) return;
-  Log::MessageBuilder msg(log_);
-  // Using non-relative system time in order to be able to synchronize with
-  // external memory profiling events (e.g. DOM memory size).
-  msg << "heap-sample-begin" << kNext << space << kNext << kind << kNext;
-  msg.Append("%.0f", V8::GetCurrentPlatform()->CurrentClockTimeMillis());
-  msg.WriteToLogFile();
-}
-
-
-void Logger::HeapSampleEndEvent(const char* space, const char* kind) {
-  if (!log_->IsEnabled() || !FLAG_log_gc) return;
-  Log::MessageBuilder msg(log_);
-  msg << "heap-sample-end" << kNext << space << kNext << kind;
-  msg.WriteToLogFile();
-}
-
-
-void Logger::HeapSampleItemEvent(const char* type, int number, int bytes) {
-  if (!log_->IsEnabled() || !FLAG_log_gc) return;
-  Log::MessageBuilder msg(log_);
-  msg << "heap-sample-item" << kNext << type << kNext << number << kNext
-      << bytes;
-  msg.WriteToLogFile();
-}
-
-
 void Logger::RuntimeCallTimerEvent() {
   RuntimeCallStats* stats = isolate_->counters()->runtime_call_stats();
   RuntimeCallCounter* counter = stats->current_counter();
@@ -1389,6 +1435,7 @@ void Logger::MapEvent(const char* type, Map* from, Map* to, const char* reason,
   int line = -1;
   int column = -1;
   Address pc = 0;
+
   if (!isolate_->bootstrapper()->IsActive()) {
     pc = isolate_->GetAbstractPC(&line, &column);
   }
@@ -1412,6 +1459,15 @@ void Logger::MapEvent(const char* type, Map* from, Map* to, const char* reason,
   msg.WriteToLogFile();
 }
 
+void Logger::MapCreate(Map* map) {
+  if (!log_->IsEnabled() || !FLAG_trace_maps) return;
+  DisallowHeapAllocation no_gc;
+  Log::MessageBuilder msg(log_);
+  msg << "map-create" << kNext << timer_.Elapsed().InMicroseconds() << kNext
+      << reinterpret_cast<void*>(map);
+  msg.WriteToLogFile();
+}
+
 void Logger::MapDetails(Map* map) {
   if (!log_->IsEnabled() || !FLAG_trace_maps) return;
   // Disable logging Map details during bootstrapping since we use LogMaps() to
@@ -1421,9 +1477,11 @@ void Logger::MapDetails(Map* map) {
   Log::MessageBuilder msg(log_);
   msg << "map-details" << kNext << timer_.Elapsed().InMicroseconds() << kNext
       << reinterpret_cast<void*>(map) << kNext;
-  std::ostringstream buffer;
-  map->PrintMapDetails(buffer);
-  msg << buffer.str().c_str();
+  if (FLAG_trace_maps_details) {
+    std::ostringstream buffer;
+    map->PrintMapDetails(buffer);
+    msg << buffer.str().c_str();
+  }
   msg.WriteToLogFile();
 }
 
@@ -1563,6 +1621,12 @@ void Logger::LogCodeObject(Object* object) {
   PROFILE(isolate_, CodeCreateEvent(tag, code_object, description));
 }
 
+void Logger::LogInstructionStream(Code* code, const InstructionStream* stream) {
+  DCHECK(Builtins::IsBuiltinId(code->builtin_index()));
+  const char* description = isolate_->builtins()->name(code->builtin_index());
+  CodeEventListener::LogEventsAndTags tag = CodeEventListener::BUILTIN_TAG;
+  PROFILE(isolate_, InstructionStreamCreateEvent(tag, stream, description));
+}
 
 void Logger::LogCodeObjects() {
   Heap* heap = isolate_->heap();
@@ -1573,6 +1637,16 @@ void Logger::LogCodeObjects() {
     if (obj->IsCode()) LogCodeObject(obj);
     if (obj->IsBytecodeArray()) LogCodeObject(obj);
   }
+}
+
+void Logger::LogBytecodeHandler(interpreter::Bytecode bytecode,
+                                interpreter::OperandScale operand_scale,
+                                Code* code) {
+  std::string bytecode_name =
+      interpreter::Bytecodes::ToString(bytecode, operand_scale);
+  PROFILE(isolate_,
+          CodeCreateEvent(CodeEventListener::BYTECODE_HANDLER_TAG,
+                          AbstractCode::cast(code), bytecode_name.c_str()));
 }
 
 void Logger::LogBytecodeHandlers() {
@@ -1590,11 +1664,7 @@ void Logger::LogBytecodeHandlers() {
       if (interpreter::Bytecodes::BytecodeHasHandler(bytecode, operand_scale)) {
         Code* code = interpreter->GetBytecodeHandler(bytecode, operand_scale);
         if (isolate_->heap()->IsDeserializeLazyHandler(code)) continue;
-        std::string bytecode_name =
-            interpreter::Bytecodes::ToString(bytecode, operand_scale);
-        PROFILE(isolate_, CodeCreateEvent(
-                              CodeEventListener::BYTECODE_HANDLER_TAG,
-                              AbstractCode::cast(code), bytecode_name.c_str()));
+        LogBytecodeHandler(bytecode, operand_scale, code);
       }
     }
   }

@@ -49,8 +49,6 @@ Reduction JSIntrinsicLowering::Reduce(Node* node) {
       return ReduceAsyncGeneratorYield(node);
     case Runtime::kInlineGeneratorGetResumeMode:
       return ReduceGeneratorGetResumeMode(node);
-    case Runtime::kInlineGeneratorGetContext:
-      return ReduceGeneratorGetContext(node);
     case Runtime::kInlineIsArray:
       return ReduceIsInstanceType(node, JS_ARRAY_TYPE);
     case Runtime::kInlineIsTypedArray:
@@ -83,12 +81,6 @@ Reduction JSIntrinsicLowering::Reduce(Node* node) {
       return ReduceCall(node);
     case Runtime::kInlineGetSuperConstructor:
       return ReduceGetSuperConstructor(node);
-    case Runtime::kInlineArrayBufferViewGetByteLength:
-      return ReduceArrayBufferViewField(
-          node, AccessBuilder::ForJSArrayBufferViewByteLength());
-    case Runtime::kInlineArrayBufferViewGetByteOffset:
-      return ReduceArrayBufferViewField(
-          node, AccessBuilder::ForJSArrayBufferViewByteOffset());
     case Runtime::kInlineArrayBufferViewWasNeutered:
       return ReduceArrayBufferViewWasNeutered(node);
     case Runtime::kInlineMaxSmi:
@@ -135,7 +127,8 @@ Reduction JSIntrinsicLowering::ReduceDeoptimizeNow(Node* node) {
 
   // TODO(bmeurer): Move MergeControlToEnd() to the AdvancedReducer.
   Node* deoptimize = graph()->NewNode(
-      common()->Deoptimize(DeoptimizeKind::kEager, DeoptimizeReason::kNoReason),
+      common()->Deoptimize(DeoptimizeKind::kEager,
+                           DeoptimizeReason::kDeoptimizeNow, VectorSlotPair()),
       frame_state, effect, control);
   NodeProperties::MergeControlToEnd(graph(), common(), deoptimize);
   Revisit(graph()->end());
@@ -198,16 +191,6 @@ Reduction JSIntrinsicLowering::ReduceAsyncGeneratorYield(Node* node) {
   return Change(
       node, Builtins::CallableFor(isolate(), Builtins::kAsyncGeneratorYield),
       0);
-}
-
-Reduction JSIntrinsicLowering::ReduceGeneratorGetContext(Node* node) {
-  Node* const generator = NodeProperties::GetValueInput(node, 0);
-  Node* const effect = NodeProperties::GetEffectInput(node);
-  Node* const control = NodeProperties::GetControlInput(node);
-  Operator const* const op =
-      simplified()->LoadField(AccessBuilder::ForJSGeneratorObjectContext());
-
-  return Change(node, op, generator, effect, control);
 }
 
 Reduction JSIntrinsicLowering::ReduceGeneratorGetResumeMode(Node* node) {
@@ -437,12 +420,12 @@ Reduction JSIntrinsicLowering::Change(Node* node, const Operator* op, Node* a,
 
 Reduction JSIntrinsicLowering::Change(Node* node, Callable const& callable,
                                       int stack_parameter_count) {
-  CallDescriptor const* const desc = Linkage::GetStubCallDescriptor(
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
       isolate(), graph()->zone(), callable.descriptor(), stack_parameter_count,
       CallDescriptor::kNeedsFrameState, node->op()->properties());
   node->InsertInput(graph()->zone(), 0,
                     jsgraph()->HeapConstant(callable.code()));
-  NodeProperties::ChangeOp(node, common()->Call(desc));
+  NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
   return Changed(node);
 }
 

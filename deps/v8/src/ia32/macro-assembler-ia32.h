@@ -24,8 +24,11 @@ constexpr Register kInterpreterAccumulatorRegister = eax;
 constexpr Register kInterpreterBytecodeOffsetRegister = ecx;
 constexpr Register kInterpreterBytecodeArrayRegister = edi;
 constexpr Register kInterpreterDispatchTableRegister = esi;
+constexpr Register kInterpreterTargetBytecodeRegister = ebx;
 constexpr Register kJavaScriptCallArgCountRegister = eax;
+constexpr Register kJavaScriptCallCodeStartRegister = ecx;
 constexpr Register kJavaScriptCallNewTargetRegister = edx;
+constexpr Register kOffHeapTrampolineRegister = ecx;
 constexpr Register kRuntimeCallFunctionRegister = ebx;
 constexpr Register kRuntimeCallArgCountRegister = eax;
 
@@ -73,18 +76,18 @@ class TurboAssembler : public Assembler {
   void LeaveFrame(StackFrame::Type type);
 
   // Print a message to stdout and abort execution.
-  void Abort(BailoutReason reason);
+  void Abort(AbortReason reason);
 
   // Calls Abort(msg) if the condition cc is not satisfied.
   // Use --debug_code to enable.
-  void Assert(Condition cc, BailoutReason reason);
+  void Assert(Condition cc, AbortReason reason);
 
   // Like Assert(), but without condition.
   // Use --debug_code to enable.
-  void AssertUnreachable(BailoutReason reason);
+  void AssertUnreachable(AbortReason reason);
 
   // Like Assert(), but always enabled.
-  void Check(Condition cc, BailoutReason reason);
+  void Check(Condition cc, AbortReason reason);
 
   // Check that the stack is aligned.
   void CheckStackAlignment();
@@ -112,6 +115,11 @@ class TurboAssembler : public Assembler {
 
   void Call(Handle<Code> target, RelocInfo::Mode rmode) { call(target, rmode); }
   void Call(Label* target) { call(target); }
+
+  void RetpolineCall(Register reg);
+  void RetpolineCall(Address destination, RelocInfo::Mode rmode);
+
+  void RetpolineJump(Register reg);
 
   void CallForDeoptimization(Address target, RelocInfo::Mode rmode) {
     call(target, rmode);
@@ -214,6 +222,8 @@ class TurboAssembler : public Assembler {
     }                                                           \
   }
 
+  AVX_OP2_WITH_TYPE(Movdqu, movdqu, XMMRegister, const Operand&)
+  AVX_OP2_WITH_TYPE(Movdqu, movdqu, const Operand&, XMMRegister)
   AVX_OP2_WITH_TYPE(Movd, movd, XMMRegister, Register)
   AVX_OP2_WITH_TYPE(Movd, movd, XMMRegister, const Operand&)
   AVX_OP2_WITH_TYPE(Movd, movd, Register, XMMRegister)
@@ -441,6 +451,7 @@ class MacroAssembler : public TurboAssembler {
                           const ParameterCount& actual, InvokeFlag flag);
 
   // On function call, call into the debugger if necessary.
+  // This may clobber ecx.
   void CheckDebugHook(Register fun, Register new_target,
                       const ParameterCount& expected,
                       const ParameterCount& actual);
@@ -451,10 +462,6 @@ class MacroAssembler : public TurboAssembler {
                       const ParameterCount& actual, InvokeFlag flag);
 
   void InvokeFunction(Register function, const ParameterCount& expected,
-                      const ParameterCount& actual, InvokeFlag flag);
-
-  void InvokeFunction(Handle<JSFunction> function,
-                      const ParameterCount& expected,
                       const ParameterCount& actual, InvokeFlag flag);
 
   // Compare object type for heap object.
@@ -572,6 +579,9 @@ class MacroAssembler : public TurboAssembler {
   // Jump to a runtime routine.
   void JumpToExternalReference(const ExternalReference& ext,
                                bool builtin_exit_frame = false);
+
+  // Generates a trampoline to jump to the off-heap instruction stream.
+  void JumpToInstructionStream(const InstructionStream* stream);
 
   // ---------------------------------------------------------------------------
   // Utilities

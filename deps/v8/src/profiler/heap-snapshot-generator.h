@@ -12,6 +12,7 @@
 #include "include/v8-profiler.h"
 #include "src/base/platform/time.h"
 #include "src/objects.h"
+#include "src/objects/fixed-array.h"
 #include "src/profiler/strings-storage.h"
 #include "src/string-hasher.h"
 #include "src/visitors.h"
@@ -26,6 +27,8 @@ class HeapIterator;
 class HeapProfiler;
 class HeapSnapshot;
 class JSArrayBuffer;
+class JSCollection;
+class JSWeakCollection;
 class SnapshotFiller;
 
 class HeapGraphEdge BASE_EMBEDDED {
@@ -511,6 +514,8 @@ class NativeObjectsExplorer {
 
   NativeGroupRetainedObjectInfo* FindOrAddGroupInfo(const char* label);
 
+  HeapEntry* EntryForEmbedderGraphNode(EmbedderGraph::Node* node);
+
   Isolate* isolate_;
   HeapSnapshot* snapshot_;
   StringsStorage* names_;
@@ -519,8 +524,9 @@ class NativeObjectsExplorer {
   // RetainedObjectInfo* -> std::vector<HeapObject*>*
   base::CustomMatcherHashMap objects_by_info_;
   base::CustomMatcherHashMap native_groups_;
-  HeapEntriesAllocator* synthetic_entries_allocator_;
-  HeapEntriesAllocator* native_entries_allocator_;
+  std::unique_ptr<HeapEntriesAllocator> synthetic_entries_allocator_;
+  std::unique_ptr<HeapEntriesAllocator> native_entries_allocator_;
+  std::unique_ptr<HeapEntriesAllocator> embedder_graph_entries_allocator_;
   // Used during references extraction.
   SnapshotFiller* filler_;
   v8::HeapProfiler::RetainerEdges edges_;

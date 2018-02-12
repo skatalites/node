@@ -143,11 +143,8 @@ Node* AsyncBuiltinsAssembler::Await(
 
   Goto(&do_perform_promise_then);
   BIND(&do_perform_promise_then);
-
-  CallBuiltin(Builtins::kPerformNativePromiseThen, context, wrapped_value,
-              on_resolve, on_reject, throwaway);
-
-  return wrapped_value;
+  return CallBuiltin(Builtins::kPerformPromiseThen, context, wrapped_value,
+                     on_resolve, on_reject, throwaway);
 }
 
 void AsyncBuiltinsAssembler::InitializeNativeClosure(Node* context,
@@ -161,6 +158,7 @@ void AsyncBuiltinsAssembler::InitializeNativeClosure(Node* context,
   CSA_ASSERT(this, WordEqual(LoadMapInstanceSizeInWords(function_map),
                              IntPtrConstant(JSFunction::kSizeWithoutPrototype /
                                             kPointerSize)));
+  STATIC_ASSERT(JSFunction::kSizeWithoutPrototype == 7 * kPointerSize);
   StoreMapNoWriteBarrier(function, function_map);
   StoreObjectFieldRoot(function, JSObject::kPropertiesOrHashOffset,
                        Heap::kEmptyFixedArrayRootIndex);

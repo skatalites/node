@@ -39,7 +39,8 @@ namespace internal {
 #define ALLOCATABLE_GENERAL_REGISTERS(R)                  \
   R(x0)  R(x1)  R(x2)  R(x3)  R(x4)  R(x5)  R(x6)  R(x7)  \
   R(x8)  R(x9)  R(x10) R(x11) R(x12) R(x13) R(x14) R(x15) \
-  R(x18) R(x19) R(x20) R(x21) R(x22) R(x23) R(x24) R(x27)
+  R(x18) R(x19) R(x20) R(x21) R(x22) R(x23) R(x24) R(x27) \
+  R(x28)
 
 #define FLOAT_REGISTERS(V)                                \
   V(s0)  V(s1)  V(s2)  V(s3)  V(s4)  V(s5)  V(s6)  V(s7)  \
@@ -295,6 +296,7 @@ class Register : public CPURegister {
 static_assert(IS_TRIVIALLY_COPYABLE(Register),
               "Register can efficiently be passed by value");
 
+constexpr bool kPadArguments = true;
 constexpr bool kSimpleFPAliasing = true;
 constexpr bool kSimdMaskRegisters = false;
 
@@ -453,8 +455,8 @@ constexpr Register no_reg = NoReg;
 GENERAL_REGISTER_CODE_LIST(DEFINE_REGISTERS)
 #undef DEFINE_REGISTERS
 
-DEFINE_REGISTER(Register, wcsp, kSPRegInternalCode, kWRegSizeInBits);
-DEFINE_REGISTER(Register, csp, kSPRegInternalCode, kXRegSizeInBits);
+DEFINE_REGISTER(Register, wsp, kSPRegInternalCode, kWRegSizeInBits);
+DEFINE_REGISTER(Register, sp, kSPRegInternalCode, kXRegSizeInBits);
 
 #define DEFINE_VREGISTERS(N)                            \
   DEFINE_REGISTER(VRegister, b##N, N, kBRegSizeInBits); \
@@ -479,13 +481,6 @@ ALIAS_REGISTER(Register, root, x26);
 ALIAS_REGISTER(Register, rr, x26);
 // Context pointer register.
 ALIAS_REGISTER(Register, cp, x27);
-// We use a register as a JS stack pointer to overcome the restriction on the
-// architectural SP alignment.
-// We chose x28 because it is contiguous with the other specific purpose
-// registers.
-STATIC_ASSERT(kJSSPCode == 28);
-ALIAS_REGISTER(Register, jssp, x28);
-ALIAS_REGISTER(Register, wjssp, w28);
 ALIAS_REGISTER(Register, fp, x29);
 ALIAS_REGISTER(Register, lr, x30);
 ALIAS_REGISTER(Register, xzr, x31);
@@ -1000,10 +995,6 @@ class Assembler : public AssemblerBase {
   inline static Address target_address_at(Address pc, Address constant_pool);
   inline static void set_target_address_at(
       Isolate* isolate, Address pc, Address constant_pool, Address target,
-      ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED);
-  static inline Address target_address_at(Address pc, Code* code);
-  static inline void set_target_address_at(
-      Isolate* isolate, Address pc, Code* code, Address target,
       ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED);
 
   // Return the code target address at a call site from the return address of
@@ -3686,18 +3677,9 @@ class PatchingAssembler : public Assembler {
   // If more or fewer instructions than expected are generated or if some
   // relocation information takes space in the buffer, the PatchingAssembler
   // will crash trying to grow the buffer.
-
-  // This version will flush at destruction.
-  PatchingAssembler(Isolate* isolate, byte* start, unsigned count)
-      : PatchingAssembler(IsolateData(isolate), start, count) {
-    CHECK_NOT_NULL(isolate);
-    isolate_ = isolate;
-  }
-
-  // This version will not flush.
+  // Note that the instruction cache will not be flushed.
   PatchingAssembler(IsolateData isolate_data, byte* start, unsigned count)
-      : Assembler(isolate_data, start, count * kInstructionSize + kGap),
-        isolate_(nullptr) {
+      : Assembler(isolate_data, start, count * kInstructionSize + kGap) {
     // Block constant pool emission.
     StartBlockPools();
   }
@@ -3710,18 +3692,12 @@ class PatchingAssembler : public Assembler {
     DCHECK((pc_offset() + kGap) == buffer_size_);
     // Verify no relocation information has been emitted.
     DCHECK(IsConstPoolEmpty());
-    // Flush the Instruction cache.
-    size_t length = buffer_size_ - kGap;
-    if (isolate_ != nullptr) Assembler::FlushICache(isolate_, buffer_, length);
   }
 
   // See definition of PatchAdrFar() for details.
   static constexpr int kAdrFarPatchableNNops = 2;
   static constexpr int kAdrFarPatchableNInstrs = kAdrFarPatchableNNops + 2;
   void PatchAdrFar(int64_t target_offset);
-
- private:
-  Isolate* isolate_;
 };
 
 
